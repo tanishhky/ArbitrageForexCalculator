@@ -2,6 +2,9 @@ import yfinance as yf
 import itertools
 from collections import defaultdict
 
+BROKER_FEE_PERCENTAGE = 0.000  # 0.02% fee per transaction
+MINIMUM_PROFIT_THRESHOLD = 0.001  # 0.1% minimum profit after fees
+
 def get_exchange_rates():
     currencies = ['USD', 'EUR', 'JPY', 'GBP', 'CHF', 'CAD', 'AUD', 'NZD', 'CNY', 'INR']
     rates = {}
@@ -10,36 +13,43 @@ def get_exchange_rates():
             if base != quote:
                 pair = f"{base}{quote}=X"
                 try:
-                    data = yf.Ticker(pair).history(period="1d")
-                    if not data.empty:
-                        rates[f"{base}/{quote}"] = data['Close'].iloc[-1]
-                        print(f"Fetched rate for {base}/{quote}: {rates[f'{base}/{quote}']}")
+                    ticker = yf.Ticker(pair)
+                    bid = ticker.info['bid']
+                    ask = ticker.info['ask']
+                    if bid and ask:
+                        spread = (ask - bid) / ((ask + bid) / 2)
+                        rates[f"{base}/{quote}"] = {
+                            'bid': bid,
+                            'ask': ask,
+                            'spread': spread
+                        }
+                        print(f"Fetched rate for {base}/{quote}: Bid {bid:.6f}, Ask {ask:.6f}, Spread {spread:.4%}")
                     else:
-                        print(f"No data available for {pair}")
+                        print(f"No bid/ask data available for {pair}")
                 except Exception as e:
                     print(f"Error fetching data for {pair}: {e}")
     return rates
 
-def calculate_arbitrage(rates, path):
-    total_rate = 1
+def calculate_arbitrage(rates, path, initial_amount=100000):
+    amount = initial_amount
     for i in range(len(path) - 1):
         pair = f"{path[i]}/{path[i+1]}"
         if pair in rates:
-            total_rate *= rates[pair]
+            amount *= rates[pair]['bid'] * (1 - BROKER_FEE_PERCENTAGE)
         else:
-            total_rate *= 1 / rates[f"{path[i+1]}/{path[i]}"]
-    return total_rate - 1  # Return profit percentage
+            amount /= rates[f"{path[i+1]}/{path[i]}"]['ask'] * (1 + BROKER_FEE_PERCENTAGE)
+    return (amount / initial_amount) - 1  # Return profit percentage
 
-def find_arbitrage_opportunities(rates):
+def find_arbitrage_opportunities(rates, initial_amount=100000):
     currencies = ['USD', 'EUR', 'JPY', 'GBP', 'CHF', 'CAD', 'AUD', 'NZD', 'CNY', 'INR']
     opportunities = []
 
     for length in range(3, 6):  # 3 to 5 currency combinations
         for path in itertools.permutations(currencies, length):
             path = list(path) + [path[0]]  # Complete the cycle
-            profit = calculate_arbitrage(rates, path)
-            if profit > 0:
-                opportunities.append((path, profit))
+            profit = calculate_arbitrage(rates, path, initial_amount)
+            if profit > MINIMUM_PROFIT_THRESHOLD:
+                opportunities.append((path, profit, profit * initial_amount))
 
     return sorted(opportunities, key=lambda x: x[1], reverse=True)
 
@@ -52,27 +62,21 @@ def main():
         return
 
     print("Calculating arbitrage opportunities...")
-    opportunities = find_arbitrage_opportunities(rates)
+    initial_amount = 100000  # USD
+    opportunities = find_arbitrage_opportunities(rates, initial_amount)
 
     if not opportunities:
         print("No profitable arbitrage opportunities found.")
     else:
-        print("\nTop 10 Most Profitable Arbitrage Opportunities:")
-        for i, (path, profit) in enumerate(opportunities[:10], 1):
+        print(f"\nTop 10 Most Profitable Arbitrage Opportunities (Initial Amount: ${initial_amount}):")
+        for i, (path, profit_percentage, profit_amount) in enumerate(opportunities[:10], 1):
             print(f"{i}. Path: {' -> '.join(path)}")
-            print(f"   Potential profit: {profit:.4%}")
+            print(f"   Potential profit: {profit_percentage:.4%} (${profit_amount:.2f})")
+            print(f"   Total return: ${initial_amount + profit_amount:.2f}")
 
-    print("\nArbitrage opportunities by number of currencies involved:")
-    opportunities_by_length = defaultdict(list)
-    for path, profit in opportunities:
-        opportunities_by_length[len(path) - 1].append((path, profit))
-
-    for length in range(3, 6):
-        top_opportunities = sorted(opportunities_by_length[length], key=lambda x: x[1], reverse=True)[:5]
-        print(f"\nTop 5 {length}-currency arbitrage opportunities:")
-        for i, (path, profit) in enumerate(top_opportunities, 1):
-            print(f"{i}. Path: {' -> '.join(path)}")
-            print(f"   Potential profit: {profit:.4%}")
+    print(f"\nNote: These calculations include actual spreads from current bid/ask prices and a broker fee of {BROKER_FEE_PERCENTAGE:.4%} per transaction.")
+    print(f"Only opportunities with a profit above {MINIMUM_PROFIT_THRESHOLD:.4%} are shown.")
+    print("Remember that forex rates change rapidly, and these opportunities may no longer be available.")
 
 if __name__ == "__main__":
     main()
